@@ -20,35 +20,24 @@ function App() {
 
   function calculatePath() {
     const fullPath: Point[] = [];
-    let current = start;
+    let currentHouse = start;
 
     for (const house of zodiacHouses) {
-      const segment = aStar(matrix, current, { x: house.x, y: house.y });
+      const pathSegment = aStar(currentHouse, { x: house.x, y: house.y });
+      if (!pathSegment) return;
 
-      if (!segment) {
-        alert(
-          `Caminho impossível! (${current.x},${current.y} -> ${house.x},${house.y})`
-        );
-        return;
-      }
-
-      fullPath.push(...segment.slice(1));
-      current = { x: house.x, y: house.y };
+      fullPath.push(...pathSegment.slice(1));
+      currentHouse = { x: house.x, y: house.y };
     }
 
-    const finalSegment = aStar(matrix, current, end);
-
-    if (!finalSegment) {
-      alert("Caminho impossível até o fim!");
-      return;
-    }
+    const finalSegment = aStar(currentHouse, end);
+    if (!finalSegment) return;
 
     fullPath.push(...finalSegment.slice(1));
 
     let step = 0;
     let cumulativeCost = 0;
     setPathCost(0);
-    const visitedHouses = new Set<string>();
 
     const interval = setInterval(() => {
       if (step >= fullPath.length) {
@@ -60,42 +49,26 @@ function App() {
       const cell = matrix[point.y][point.x];
       cumulativeCost += cell.minutes;
 
-      const house = zodiacHouses.find(
-        (h) => h.x === point.x && h.y === point.y
-      );
+      if (cell.difficulty > 0) {
+        setBronzeSaints((prevSaints) => {
+          const fighters = selectFightersForHouse(cell.difficulty, prevSaints);
 
-      if (house) {
-        const houseKey = `${house.x},${house.y}`;
+          if (fighters.length === 0) {
+            clearInterval(interval);
+            return prevSaints;
+          }
 
-        if (!visitedHouses.has(houseKey)) {
-          visitedHouses.add(houseKey);
+          const totalCosmos = fighters.reduce((acc, s) => acc + s.cosmos, 0);
+          const battleTime =
+            totalCosmos > 0 ? cell.difficulty / totalCosmos : 0;
+          cumulativeCost += battleTime;
 
-          setBronzeSaints((prevSaints) => {
-            const fighters = selectFightersForHouse(
-              house.difficulty,
-              prevSaints
-            );
-
-            if (fighters.length === 0) {
-              alert(
-                `Não há cavaleiros com energia suficiente antes de ${house.x},${house.y}!`
-              );
-              clearInterval(interval);
-              return prevSaints;
-            }
-
-            const totalCosmos = fighters.reduce((acc, s) => acc + s.cosmos, 0);
-            const battleTime =
-              totalCosmos > 0 ? house.difficulty / totalCosmos : 0;
-            cumulativeCost += battleTime;
-
-            return prevSaints.map((s) =>
-              fighters.includes(s) && s.energy > 0
-                ? { ...s, energy: s.energy - 1 }
-                : s
-            );
-          });
-        }
+          return prevSaints.map((s) =>
+            fighters.includes(s) && s.energy > 0
+              ? { ...s, energy: s.energy - 1 }
+              : s
+          );
+        });
       }
 
       setPathCost(Math.round(cumulativeCost));
@@ -113,21 +86,24 @@ function App() {
     }, 50);
   }
 
-  function aStar(matrix: Matrix, start: Point, end: Point): Point[] | null {
+  function aStar(start: Point, end: Point): Point[] | null {
     const open: Point[] = [start];
     const cameFrom = new Map<string, Point>();
     const gScore = new Map<string, number>();
     const fScore = new Map<string, number>();
     const key = (p: Point) => `${p.x},${p.y}`;
-    gScore.set(key(start), 0);
-    fScore.set(key(start), manhattan(start, end));
+    const startKey = key(start);
+    gScore.set(startKey, 0);
+    fScore.set(startKey, manhattan(start, end));
 
     while (open.length > 0) {
       open.sort(
         (a, b) =>
           (fScore.get(key(a)) ?? Infinity) - (fScore.get(key(b)) ?? Infinity)
       );
+
       const current = open.shift()!;
+
       if (current.x === end.x && current.y === end.y)
         return reconstructPath(cameFrom, current);
 
@@ -135,11 +111,13 @@ function App() {
         const tentativeG =
           (gScore.get(key(current)) ?? Infinity) +
           matrix[neighbor.y][neighbor.x].minutes;
+        const neighborKey = key(neighbor);
 
-        if (tentativeG < (gScore.get(key(neighbor)) ?? Infinity)) {
-          cameFrom.set(key(neighbor), current);
-          gScore.set(key(neighbor), tentativeG);
-          fScore.set(key(neighbor), tentativeG + manhattan(neighbor, end));
+        if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
+          cameFrom.set(neighborKey, current);
+          gScore.set(neighborKey, tentativeG);
+          fScore.set(neighborKey, tentativeG + manhattan(neighbor, end));
+
           if (!open.some((p) => p.x === neighbor.x && p.y === neighbor.y))
             open.push(neighbor);
         }
@@ -154,18 +132,14 @@ function App() {
     bronzeSaints: BronzeSaint[]
   ): BronzeSaint[] {
     const availableSaints = bronzeSaints.filter((s) => s.energy > 0);
-
-    if (availableSaints.length === 0) {
-      return [];
-    }
+    if (availableSaints.length === 0) return [];
 
     const sortedSaints = [...availableSaints].sort(
       (a, b) => b.cosmos - a.cosmos
     );
     const needed = Math.round((houseDifficulty / 120) * 3);
-    const selected = sortedSaints.slice(0, needed);
 
-    return selected;
+    return sortedSaints.slice(0, needed);
   }
 
   function manhattan(a: Point, b: Point) {
@@ -184,11 +158,7 @@ function App() {
       .map((m) => ({ x: p.x + m.x, y: p.y + m.y }))
       .filter(
         (n) =>
-          n.x >= 0 &&
-          n.y >= 0 &&
-          n.x < matrix[0].length &&
-          n.y < matrix.length &&
-          matrix[n.y][n.x].minutes < Infinity
+          n.x >= 0 && n.y >= 0 && n.x < matrix[0].length && n.y < matrix.length
       );
   }
 
